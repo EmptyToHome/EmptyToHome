@@ -1,0 +1,334 @@
+from django.db import models
+from django.contrib.auth.models import AbstractUser
+
+class User(AbstractUser):
+    USER_TYPE_CHOICES = (
+        ('institution', 'Istituzione'),
+        ('owner', 'Proprietario'),
+        ('tenant', 'Affittuario'),
+        ('investor', 'Finanziatore'),
+    )
+    user_type = models.CharField(max_length=10, choices=USER_TYPE_CHOICES, default='tenant')
+
+    def __str__(self):
+        return self.username
+
+class Property(models.Model):
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, limit_choices_to={'user_type': 'owner'})
+    address = models.CharField(max_length=255)
+    city = models.CharField(max_length=100)
+    area = models.FloatField()  # Metratura
+    rooms = models.IntegerField()  # Numero di stanze
+    bathrooms = models.IntegerField()  # Numero di bagni
+    has_courtyard = models.BooleanField(default=False)  # Presenza di cortile
+    floor = models.IntegerField()  # Piano dell'appartamento
+    image = models.ImageField(upload_to='property_images/', blank=True, null=True)  # Immagine della proprietà
+    number = models.CharField(max_length=50, unique=True)  # Numero identificativo della proprietà
+
+    def __str__(self):
+        return f"{self.address}, {self.city}"
+
+class Contract(models.Model):
+    CONTRACT_TYPE_CHOICES = (
+        ('4+4', '4+4 Rinnovabile'),
+        ('student', 'Contratto Studenti'),
+    )
+    property = models.OneToOneField(Property, on_delete=models.CASCADE)
+    contract_type = models.CharField(max_length=10, choices=CONTRACT_TYPE_CHOICES)
+    document = models.FileField(upload_to='contracts/')
+
+    def __str__(self):
+        return f"Contratto per {self.property.address}"
+
+class Payment(models.Model):
+    PAYMENT_METHOD_CHOICES = (
+        ('bancomat', 'Bancomat'),
+        ('credit_card', 'Carta di Credito'),
+        ('debit_card', 'Carta di Debito'),
+        ('paypal', 'PayPal'),
+        ('satispay', 'Satispay'),
+        ('bank_account', 'Conto Corrente'),
+        ('bank_transfer', 'Bonifico'),
+        ('crowdfunding', 'Crowdfunding'),
+    )
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES)
+    details = models.TextField()  # Dettagli aggiuntivi come numero di conto, ID PayPal, ecc.
+
+    def __str__(self):
+        return f"Pagamento di {self.user.username} tramite {self.get_payment_method_display()}"
+
+class MeetingRequest(models.Model):
+    investor = models.ForeignKey(User, on_delete=models.CASCADE, limit_choices_to={'user_type': 'investor'})
+    date = models.DateTimeField()
+    message = models.TextField()
+    response = models.TextField(blank=True, null=True)
+
+    def __str__(self):
+        return f"Incontro richiesto da {self.investor.username} per {self.date}"
+```
+
+
+```python
+from django import forms
+from .models import Contract, Payment, MeetingRequest
+
+class ContractForm(forms.ModelForm):
+    class Meta:
+        model = Contract
+        fields = ['property', 'contract_type', 'document']
+        widgets = {
+            'document': forms.ClearableFileInput(attrs={'multiple': True}),
+        }
+
+class PaymentForm(forms.ModelForm):
+    class Meta:
+        model = Payment
+        fields = ['payment_method', 'details']
+
+class MeetingRequestForm(forms.ModelForm):
+    class Meta:
+        model = MeetingRequest
+        fields = ['date', 'message']
+        widgets = {
+            'date': forms.DateTimeInput(attrs={'type': 'datetime-local'}),
+        }
+```
+
+
+```python
+from django.shortcuts import render, redirect
+from django.contrib.auth.decorators import login_required
+from django.http import HttpResponse, FileResponse
+from .models import Property, Contract, Payment, MeetingRequest
+from .forms import ContractForm, PaymentForm, MeetingRequestForm
+import os
+
+@login_required
+def home(request):
+    return render(request, 'home.html')
+
+@login_required
+def user_login(request):
+    # Logica di login
+    return render(request, 'login.html')
+
+@login_required
+def institution_dashboard(request):
+    # Dashboard per istituzioni
+    return render(request, 'institution_dashboard.html')
+
+@login_required
+def owner_dashboard(request):
+    # Dashboard per proprietari
+    return render(request, 'owner_dashboard.html')
+
+@login_required
+def tenant_dashboard(request):
+    # Dashboard per affittuari
+    return render(request, 'tenant_dashboard.html')
+
+@login_required
+def investor_dashboard(request):
+    # Dashboard per finanziatori
+    requests = MeetingRequest.objects.filter(investor=request.user)
+    return render(request, 'investor_dashboard.html', {'requests': requests})
+
+@login_required
+def add_payment_method(request):
+    if request.method == 'POST':
+        form = PaymentForm(request.POST)
+        if form.is_valid():
+            payment = form.save(commit=False)
+            payment.user = request.user
+            payment.save()
+            return redirect('view_payments')
+    else:
+        form = PaymentForm()
+    return render(request, 'add_payment_method.html', {'form': form})
+
+@login_required
+def view_payments(request):
+    payments = Payment.objects.filter(user=request.user)
+    return render(request, 'view_payments.html', {'payments': payments})
+
+@login_required
+def upload_contract(request):
+    if request.method == 'POST':
+        form = ContractForm(request.POST, request.FILES)
+        if form.is_valid():
+            contract = form.save(commit=False)
+            contract.save()
+            return redirect('tenant_dashboard')
+    else:
+        form = ContractForm()
+    return render(request, 'upload_contract.html', {'form': form})
+
+@login_required
+def download_contract(request, contract_id):
+    try:
+        contract = Contract.objects.get(id=contract_id)
+        file_path = contract.document.path
+        if os.path.exists(file_path):
+            with open(file_path, 'rb') as f:
+                response = FileResponse(f, content_type='application/pdf')
+                response['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
+                return response
+        else:
+            return HttpResponse('File not found')
+    except Contract.DoesNotExist:
+        return HttpResponse('Contract not found')
+
+@login_required
+def property_list(request):
+    properties = Property.objects.all()
+    return render(request, 'property_list.html', {'properties': properties})
+
+@login_required
+def upload_property_image(request):
+    # Carica immagine della proprietà
+    return render(request, 'upload_property_image.html')
+
+@login_required
+def search_properties(request):
+    # Ricerca delle proprietà
+    pass
+
+@login_required
+def request_meeting(request):
+    if request.method == 'POST':
+        form = MeetingRequestForm(request.POST)
+        if form.is_valid():
+            meeting_request = form.save(commit=False)
+            meeting_request.investor = request.user
+            meeting_request.save()
+            return redirect('investor_dashboard')
+    else:
+        form = MeetingRequestForm()
+    return render(request, 'request_meeting.html', {'form': form})
+
+@login_required
+def manage_meetings(request):
+    # Gestione richieste di incontro
+    requests = MeetingRequest.objects.all()
+    return render(request, 'manage_meetings.html', {'requests': requests})
+```
+
+
+```html
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Home - EmptyToHome</title>
+    <style>
+        body {
+            background-color: #f0f8ff;
+            color: #000;
+            font-family: Arial, sans-serif;
+        }
+        .header {
+            background-color: #ff69b4;
+            color: #fff;
+            text-align: center;
+            padding: 1em;
+        }
+        .section {
+            padding: 2em;
+        }
+        .button {
+            background-color: #00bfff;
+            color: #fff;
+            padding: 0.5em 1em;
+            text-decoration: none;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>EmptyToHome</h1>
+        <p>L'accoglienza è di casa</p>
+    </div>
+    <div class="section">
+        <h2>Come è nata l'idea</h2>
+        <p>La startup EmptyToHome è nata per rispondere alla crescente domanda di soluzioni abitative per persone a basso reddito, studenti e sfollati a causa di calamità naturali. Il nostro obiettivo è garantire che nessuno rimanga senza una casa sicura e dignitosa.</p>
+    </div>
+    <a href="{% url 'login' %}" class="button">Login</a>
+    <a href="{% url 'search_properties' %}" class="button">Cerca Proprietà</a
+
+>
+    <a href="{% url 'investor_dashboard' %}" class="button">Dashboard Finanziatori</a>
+</body>
+</html>
+```
+
+
+```html
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Finanziatori - EmptyToHome</title>
+</head>
+<body>
+    <h1>Dashboard Finanziatori</h1>
+    <p>Benvenuto nella tua dashboard, {{ user.username }}!</p>
+    <h2>Richieste di Incontro</h2>
+    <ul>
+        {% for request in requests %}
+        <li>{{ request.date }} - {{ request.message }} - Risposta: {{ request.response }}</li>
+        {% empty %}
+        <li>Nessuna richiesta di incontro.</li>
+        {% endfor %}
+    </ul>
+    <a href="{% url 'request_meeting' %}">Richiedi un incontro</a>
+</body>
+</html>
+```
+
+
+```html
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Richiedi Incontro - EmptyToHome</title>
+</head>
+<body>
+    <h1>Richiedi un Incontro</h1>
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit">Invia Richiesta</button>
+    </form>
+    <a href="{% url 'investor_dashboard' %}">Torna alla Dashboard</a>
+</body>
+</html>
+```
+
+
+```python
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path('', views.home, name='home'),
+    path('login/', views.user_login, name='login'),
+    path('institution_dashboard/', views.institution_dashboard, name='institution_dashboard'),
+    path('owner_dashboard/', views.owner_dashboard, name='owner_dashboard'),
+    path('tenant_dashboard/', views.tenant_dashboard, name='tenant_dashboard'),
+    path('investor_dashboard/', views.investor_dashboard, name='investor_dashboard'),
+    path('add_payment_method/', views.add_payment_method, name='add_payment_method'),
+    path('view_payments/', views.view_payments, name='view_payments'),
+    path('upload_contract/', views.upload_contract, name='upload_contract'),
+    path('download_contract/<int:contract_id>/', views.download_contract, name='download_contract'),
+    path('property_list/', views.property_list, name='property_list'),
+    path('upload_property_image/', views.upload_property_image, name='upload_property_image'),
+    path('search_properties/', views.search_properties, name='search_properties'),
+    path('request_meeting/', views.request_meeting, name='request_meeting'),
+    path('manage_meetings/', views.manage_meetings, name='manage_meetings'),
+]
