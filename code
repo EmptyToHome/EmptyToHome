@@ -68,7 +68,6 @@ class MeetingRequest(models.Model):
         return f"Incontro richiesto da {self.investor.username} per {self.date}"
 ```
 
-
 ```python
 from django import forms
 from .models import Contract, Payment, MeetingRequest
@@ -214,7 +213,6 @@ def manage_meetings(request):
     return render(request, 'manage_meetings.html', {'requests': requests})
 ```
 
-
 ```html
 <!DOCTYPE html>
 <html lang="it">
@@ -264,7 +262,6 @@ def manage_meetings(request):
 </html>
 ```
 
-
 ```html
 <!DOCTYPE html>
 <html lang="it">
@@ -289,7 +286,6 @@ def manage_meetings(request):
 </html>
 ```
 
-
 ```html
 <!DOCTYPE html>
 <html lang="it">
@@ -309,7 +305,6 @@ def manage_meetings(request):
 </body>
 </html>
 ```
-
 
 ```python
 from django.urls import path
